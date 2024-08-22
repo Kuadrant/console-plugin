@@ -15,7 +15,6 @@ interface Configuration extends WebpackConfiguration {
 
 const config: Configuration = {
   mode: isProd ? 'production' : 'development',
-  // No regular entry points needed. All plugin related scripts are generated via ConsoleRemotePlugin.
   entry: {},
   context: path.resolve(__dirname, 'src'),
   output: {
@@ -29,8 +28,20 @@ const config: Configuration = {
   module: {
     rules: [
       {
-        test: /\.(jsx?|tsx?)$/,
-        exclude: /\/node_modules\//,
+        test: /\.(js|jsx)$/,
+        exclude: /node_modules\/(?!(react-policy-topology\/|some-other-library\/)).*/,
+        use: [
+          {
+            loader: 'babel-loader',
+            options: {
+              presets: ['@babel/preset-env', '@babel/preset-react'],
+            },
+          },
+        ],
+      },
+      {
+        test: /\.(ts|tsx)$/,
+        exclude: /node_modules/,
         use: [
           {
             loader: 'ts-loader',
@@ -62,7 +73,6 @@ const config: Configuration = {
   devServer: {
     static: './dist',
     port: 9001,
-    // Allow Bridge running in a container to connect to the plugin dev server.
     allowedHosts: 'all',
     headers: {
       'Access-Control-Allow-Origin': '*',
