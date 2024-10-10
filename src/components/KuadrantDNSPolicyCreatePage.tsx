@@ -19,8 +19,8 @@ import {
 } from '@patternfly/react-core';
 import { useTranslation } from 'react-i18next';
 import './kuadrant.css';
-import { ResourceYAMLEditor, getGroupVersionKindForResource, useK8sModel, useActiveNamespace } from '@openshift-console/dynamic-plugin-sdk';
-import { useHistory } from 'react-router-dom';
+import { ResourceYAMLEditor, getGroupVersionKindForResource, useK8sModel, useK8sWatchResource, K8sResourceCommon,useActiveNamespace } from '@openshift-console/dynamic-plugin-sdk';
+import { useHistory, useLocation } from 'react-router-dom';
 import { LoadBalancing, HealthCheck } from './dnspolicy/types'
 import LoadBalancingField from './dnspolicy/LoadBalancingField';
 import HealthCheckField from './dnspolicy/HealthCheckField';
@@ -42,9 +42,16 @@ const KuadrantDNSPolicyCreatePage: React.FC = () => {
   const [selectedNamespace] = useActiveNamespace();
   const [selectedGateway, setSelectedGateway] = React.useState<Gateway>({ name: '', namespace: '' });
   const [loadBalancing, setLoadBalancing] = React.useState<LoadBalancing>({ geo: '', weight: 0, defaultGeo: true });
-  const [healthCheck, setHealthCheck] = React.useState<HealthCheck>({ endpoint: '', failureThreshold: null, port: null, protocol: null, });
+  const [healthCheck, setHealthCheck] = React.useState<HealthCheck>({ endpoint: '', failureThreshold: 0, port: 0, protocol: 'HTTP', });
   // const [isCreateButtonDisabled, setIsCreateButtonDisabled] = React.useState(true);
   const [providerRefs, setProviderRefs] = React.useState([]);
+
+  const location = useLocation();
+  const pathSplit = location.pathname.split('/')
+  const nameEdit = pathSplit[6]
+  const namespaceEdit = pathSplit[3]
+  const [formDisabled, setFormDisabled] = React.useState(false);
+  const [create, setCreate] = React.useState(true);
 
 
   const createDNSPolicy = () => {
@@ -72,10 +79,10 @@ const KuadrantDNSPolicyCreatePage: React.FC = () => {
 
         ...(hasHealthCheck && { // Only include healthCheck if hasHealthCheck is true
           healthCheck: {
-            endpoint: healthCheck.endpoint,
-            failureThreshold: healthCheck.failureThreshold,
-            port: healthCheck.port,
-            protocol: healthCheck.protocol,
+            endpoint: healthCheck?.endpoint,
+            failureThreshold: healthCheck?.failureThreshold,
+            port: healthCheck?.port,
+            protocol: healthCheck?.protocol,
           }
         })
       }
@@ -111,37 +118,120 @@ const KuadrantDNSPolicyCreatePage: React.FC = () => {
 
   const history = useHistory();
 
+  interface dnsPolicyEdit extends K8sResourceCommon {
+    spec?: {
+      targetRef?: {
+        group?: string;
+        kind?: string;
+        name?: string;
+      };
+
+      loadBalancing: {
+        weight?: number;
+        geo?: string;
+        defaultGeo?: boolean;
+      },
+      providerRefs?: {
+        name?: string;
+      }[];
+
+      healthCheck?: {
+        endpoint?: string;
+        failureThreshold?: number;
+        port?: number;
+        protocol?: 'HTTP' | 'HTTPS'; 
+      }
+    }
+
+
+  }
+
+
+
+
+  //Checking if the policy already exists and is to be edited or if its new and is being created
+  let dnsResource = null
+  if (nameEdit) {
+    dnsResource = {
+      groupVersionKind: dnsPolicyGVK,
+      isList: false,
+      name: nameEdit,
+      namespace: namespaceEdit
+    };
+  }
+
+  const [dnsData, dnsLoaded, dnsError] = dnsResource ? useK8sWatchResource(dnsResource) : [null, false, null]; //Syntax allows for dnsResource to be null in the case of a create 
+
+
+  React.useEffect(() => {
+
+    if (dnsLoaded && !dnsError) {
+      if (!Array.isArray(dnsData)) {
+        const dnsPolicyUpdate = dnsData as dnsPolicyEdit;
+        setFormDisabled(true)
+        setCreate(false)
+        setPolicyName(dnsPolicyUpdate.metadata?.name || '');
+        setSelectedGateway({ name: dnsPolicyUpdate.spec?.targetRef?.name || '', namespace: dnsPolicyUpdate.metadata?.namespace || '' });
+        setHealthCheck({
+          endpoint: dnsPolicyUpdate.spec?.healthCheck?.endpoint || '',
+          failureThreshold: dnsPolicyUpdate.spec?.healthCheck?.failureThreshold,
+          port: dnsPolicyUpdate.spec?.healthCheck?.port || 0,
+          protocol: dnsPolicyUpdate.spec?.healthCheck?.protocol || 'HTTP',
+        });
+        const providerRef = Array.isArray(dnsPolicyUpdate.spec?.providerRefs) && dnsPolicyUpdate.spec.providerRefs.length > 0
+          ? dnsPolicyUpdate.spec.providerRefs[0]
+          : { name: '' };
+
+        setProviderRefs([providerRef]);
+        setLoadBalancing({
+          geo: dnsPolicyUpdate.spec?.loadBalancing?.geo || '',
+          weight: dnsPolicyUpdate.spec?.loadBalancing?.weight || 0,
+          defaultGeo: dnsPolicyUpdate.spec?.loadBalancing?.defaultGeo !== undefined
+            ? dnsPolicyUpdate.spec.loadBalancing?.defaultGeo
+            : false,  // Default to false if not present
+
+        });
+
+        console.log("Initializing dns with existing dns for update");
+      }
+    } else if (dnsError) {
+      console.error('Failed to fetch the resource:', dnsError);
+    }
+  }, [dnsData, dnsLoaded, dnsError]);
+
+
+
   const handleYAMLChange = (yamlInput: string) => {
     try {
       const parsedYaml = yaml.load(yamlInput)
       setPolicyName(parsedYaml.metadata?.name || '');
       setSelectedGateway({ name: parsedYaml.spec?.targetRef?.name || '', namespace: parsedYaml.metadata?.namespace || '' });
       setHealthCheck({
-        endpoint: parsedYaml.spec?.healthCheck.endpoint || '',
-        failureThreshold: parsedYaml.spec?.healthCheck.failureThreshold,
-        port: parsedYaml.spec?.healthCheck.port || '',
-        protocol: parsedYaml.spec?.healthCheck.protocol || '',
+        endpoint: parsedYaml.spec?.healthCheck?.endpoint || '',
+        failureThreshold: parsedYaml.spec?.healthCheck?.failureThreshold,
+        port: parsedYaml.spec?.healthCheck?.port || '',
+        protocol: parsedYaml.spec?.healthCheck?.protocol || '',
       });
       const providerRef = Array.isArray(parsedYaml.spec?.providerRefs) && parsedYaml.spec.providerRefs.length > 0
-        ? parsedYaml.spec.providerRefs[0] 
-        : { name: '' }; 
+        ? parsedYaml.spec.providerRefs[0]
+        : { name: '' };
 
       setProviderRefs([providerRef]);
-      const defaultGeo = (parsedYaml.spec?.loadBalancing.defaultGeo || '');
+      // const defaultGeo = (parsedYaml.spec?.loadBalancing.defaultGeo || '');
 
-      console.log("zdgsdgdshh", defaultGeo)
+      // console.log("zdgsdgdshh", defaultGeo)
 
-      const weight = (parsedYaml.spec?.loadBalancing.weight || '');
-      console.log("ghdhdfhdfh", weight)
+      // const weight = (parsedYaml.spec?.loadBalancing.weight || '');
+      // console.log("ghdhdfhdfh", weight)
 
-      const geo = (parsedYaml.spec?.loadBalancing.geo || '');
-      console.log("fgfgjfgj", geo)
+      // const geo = (parsedYaml.spec?.loadBalancing.geo || '');
+      // console.log("fgfgjfgj", geo)
 
       setLoadBalancing({
-        geo: parsedYaml.spec?.loadBalancing.geo || '',
-        weight: parsedYaml.spec?.loadBalancing.weight || '',
+        geo: parsedYaml.spec?.loadBalancing?.geo || '',
+        weight: parsedYaml.spec?.loadBalancing?.weight || '',
         defaultGeo: parsedYaml.spec?.loadBalancing?.defaultGeo !== undefined
-          ? parsedYaml.spec.loadBalancing.defaultGeo
+          ? parsedYaml.spec.loadBalancing?.defaultGeo
           : false,  // Default to false if not present
 
       });
@@ -326,6 +416,7 @@ const KuadrantDNSPolicyCreatePage: React.FC = () => {
                   name="policy-name"
                   value={policyName}
                   onChange={handlePolicyChange}
+                  isDisabled={formDisabled}
                 />
                 <FormHelperText>
                   <HelperText>
@@ -379,8 +470,8 @@ const KuadrantDNSPolicyCreatePage: React.FC = () => {
       ) : (
         <React.Suspense fallback={<div> {t('Loading..')}.</div>}>
           <ResourceYAMLEditor
-            initialResource={yamlInput}
-            create={true}
+            initialResource={create ? yamlInput : dnsData}
+            create={create}
             onChange={handleYAMLChange}
           >
           </ResourceYAMLEditor>
